@@ -1,10 +1,10 @@
-;;
-;; 2ndStage.asm
-;;
-org 0x7e00
-	use16
+use16
+	org 0x7e00					; 512 bytes after the bootsector in memory
 	mov [loader_drivenum], dl
-	
+
+	mov ah, 0x00
+	mov al, 0x02			; 80x25 text mode
+	int 0x10				; reset the screen
 	; setup vbe info structure
 	xor ax, ax
 	mov es, ax
@@ -97,86 +97,59 @@ end_of_modes:
 	int 0x10
 	cli
 	hlt
+
+GDT_Start:
+	;; Offset 0x00
+	dq 0x00				; 1st descriptor required to be NULL descriptor
+
+	;; Offset 0x08
+	.code:
+		dw 0xffff		; Segment limit 1 - 2 bytes
+		dw 0x0000		; Segment base 1 - 2 bytes
+		db 0x00			; Segment base 1 - 2 byte
+		db 10011010b	; Access byte - bits: 7 - Present, 6-5 - privelege level (0 = kernel),
+						; 4 - descriptor type (code/data), 3 - executable y/n, 2 - direction/conforming
+						; (grow up from base to limit), 1 - read/write, 0 - accessed (CPU sets this)
+		db 11001111b	; bits: 7 - granularity (4KiB), 6 - size (32bit protected mode), 3-0 - segment
+						; limit 2 - 4 bits
+		db 0x00			; Segment base 3-1 byte
+	;; Offset 0x10
+	.data:
+		dw 0xffff		; Segment limit 1 - 2 bytes
+		dw 0x00			; Segment base 1 - 2 bytes
+		db 0x00			; Segment base 1 - 2 byte
+		db 10010010b	; Access byte
+		db 11001111b	; bits: 7 - granularity (4KiB), 6 - size (32bit protected mode), 3-0 - segment
+						; limit 2 - 4 bits
+		db 0h			; Segment base 3-1 byte
+
+GDT_Desc:
+	dw ($-GDT_Start-1)
+	dd GDT_Start
+
 load_GDT:
-	push bx
-	xor bx, bx
-	mov es, bx
-	pop bx
+	mov dl, [loader_drivenum]
+	cli						; Clear interrupts first
+	lgdt [GDT_Desc]			; Load the GDT to the CPU
 
-	cli
-
-	mov edi, 0x1000
-	mov cr3, edi
-	xor eax, eax
-	mov ecx, 4096
-	rep stosd
-	mov edi, 0x1000
-
-	mov dword [edi], 0x2003
-	add edi, 0x1000
-	mov dword [edi], 0x3003
-	add edi, 0x1000
-	mov dword [edi], 0x4003
-	add edi, 0x1000
-	
-	mov dword ebx, 3
-	mov ecx, 512
-
-	.setEntry:
-		mov dword [edi], ebx
-		add ebx, 0x1000
-		add edi, 8
-		loop .setEntry
-
-	mov eax, cr4
-	or eax, 1 << 5
-	mov cr4, eax
-
-	mov ecx, 0xc0000080
-	rdmsr
-	or eax, 1 << 8
-	wrmsr
-	
 	mov eax, cr0
-	or eax, 1 << 31
-	or eax, 1 << 0
-	mov cr0, eax
+	or  eax, 1				; Set protected mode bit
+	mov cr0, eax			; Turn on protected mode
 
-	lgdt [GDT.Pointer]
+	jmp 0x08:set_segments
 
-	
+use32
+set_segments:
+	mov ax, 10h				; Set to data segment desciptor
+	mov ds, ax
+	mov es, ax
+	mov fs, ax
+	mov gs, ax
+	mov ss, ax
 	mov esp, 0x90000		; Set up stack pointer
-	jmp GDT.Code:0x900
 
-use16
-GDT:
-  .Null: equ $ - GDT
-    dw 0
-    dw 0
-    db 0
-    db 0
-    db 0
-    db 0
+	jmp 0x08:0x900
 
-  .Code: equ $ - GDT
-    dw 0
-    dw 0
-    db 0
-    db 10011000b
-    db 00100000b
-    db 0
-
-  .Data: equ $ -GDT
-    dw 0
-    dw 0
-    db 0
-    db 10000000b
-    db 0
-    db 0
-
-  .Pointer:
-    dw $ - GDT - 1
-    dq GDT
 loader_drivenum: db 0
 
 width: dw 0x320
@@ -185,6 +158,7 @@ bpp: db 32
 mode: dw 0
 offset: dw 0
 t_segment: dw 0
+
 	times 512-($-$$) db 0
 ;; Sector 2
 vbe_info_block:								; total 512 bytes
@@ -260,4 +234,5 @@ mode_info_block:
 
 	.reserved4: 	  times 190 db 0		; Remainder of mode info block
 
+	;; Sector padding
 	times 1536-($-$$) db 0
